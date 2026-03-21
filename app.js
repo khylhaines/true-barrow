@@ -1,0 +1,1019 @@
+import { PINS } from "./pins.js";
+import { getQA } from "./qa.js";
+import { ADULT_PINS } from "./adult_pins.js";
+import { ADULT_CONTENT } from "./adult_content.js";
+import { getRandomMystery } from "./mysteries.js";
+
+const $ = (id) => document.getElementById(id);
+
+const SAVE_KEY = "bq_world_v8";
+
+const DEFAULT_STATE = {
+  players: [
+    { id: "p1", name: "Player 1", coins: 0, enabled: true },
+    { id: "p2", name: "Player 2", coins: 0, enabled: false },
+    { id: "p3", name: "Player 3", coins: 0, enabled: false },
+    { id: "p4", name: "Player 4", coins: 0, enabled: false },
+  ],
+  activePlayerId: "p1",
+
+  mapMode: "core", // core | park | abbey
+  activePack: "classic", // classic | adult
+  activeAdultCategory: null, // true_crime | conspiracy | history
+  tierMode: "kid", // kid | teen | adult | auto
+
+  unlockedMysteries: [],
+
+  settings: {
+    radius: 35,
+    voicePitch: 1,
+    voiceRate: 1,
+    sfxVol: 80,
+    zoomUI: false,
+    character: "hero_duo",
+  },
+};
+
+let state = loadState();
+
+let map = null;
+let heroMarker = null;
+let activeMarkers = {};
+let currentPin = null;
+let currentTask = null;
+let nightVisionOn = false;
+
+const CHARACTER_ICONS = {
+  hero_duo: "🧭",
+  ninja: "🥷",
+  wizard: "🧙",
+  robot: "🤖",
+  pirate: "🏴‍☠️",
+};
+
+/* ============================
+   SPEECH / NARRATOR
+============================ */
+let speechEnabled = true;
+let speechVoice = null;
+
+function loadVoices() {
+  const voices = window.speechSynthesis?.getVoices?.() || [];
+  speechVoice =
+    voices.find((v) => /en-GB/i.test(v.lang)) ||
+    voices.find((v) => /en/i.test(v.lang)) ||
+    voices[0] ||
+    null;
+}
+
+function stopSpeech() {
+  try {
+    window.speechSynthesis?.cancel();
+  } catch {}
+}
+
+function speakText(text, interrupt = true) {
+  if (!speechEnabled || !("speechSynthesis" in window) || !text) return;
+
+  try {
+    if (interrupt) stopSpeech();
+
+    const utter = new SpeechSynthesisUtterance(String(text));
+    utter.pitch = Number(state?.settings?.voicePitch || 1);
+    utter.rate = Number(state?.settings?.voiceRate || 1);
+    utter.volume = Math.max(
+      0,
+      Math.min(1, Number(state?.settings?.sfxVol || 80) / 100)
+    );
+
+    if (speechVoice) utter.voice = speechVoice;
+
+    window.speechSynthesis.speak(utter);
+  } catch (err) {
+    console.warn("Speech failed:", err);
+  }
+}
+
+function speakOptions(options = []) {
+  if (!Array.isArray(options) || !options.length) return;
+  const lines = options.map((opt, i) => `Option ${i + 1}. ${opt}`);
+  speakText(lines.join(". "));
+}
+
+/* ============================
+   SAVE / STATE
+============================ */
+function loadState() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return structuredClone(DEFAULT_STATE);
+
+    const parsed = JSON.parse(raw);
+
+    return {
+      ...structuredClone(DEFAULT_STATE),
+      ...parsed,
+      settings: {
+        ...structuredClone(DEFAULT_STATE.settings),
+        ...(parsed.settings || {}),
+      },
+      players:
+        Array.isArray(parsed.players) && parsed.players.length
+          ? parsed.players
+          : structuredClone(DEFAULT_STATE.players),
+      unlockedMysteries: Array.isArray(parsed.unlockedMysteries)
+        ? parsed.unlockedMysteries
+        : [],
+    };
+  } catch {
+    return structuredClone(DEFAULT_STATE);
+  }
+}
+
+function saveState() {
+  localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+}
+
+/* ============================
+   PLAYERS / HUD
+============================ */
+function getEnabledPlayers() {
+  return state.players.filter((p) => p.enabled);
+}
+
+function getActivePlayer() {
+  return (
+    state.players.find((p) => p.id === state.activePlayerId && p.enabled) ||
+    getEnabledPlayers()[0] ||
+    state.players[0]
+  );
+}
+
+function setActivePlayer(id) {
+  const player = state.players.find((p) => p.id === id && p.enabled);
+  if (!player) return;
+  state.activePlayerId = id;
+  saveState();
+  renderHUD();
+}
+
+function setPlayerCount(count) {
+  state.players.forEach((p, i) => {
+    p.enabled = i < count;
+  });
+
+  const active = getActivePlayer();
+  state.activePlayerId = active.id;
+  saveState();
+  renderHUD();
+}
+
+function updateCoins(playerId, amount) {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return;
+  player.coins += amount;
+  saveState();
+  renderHUD();
+}
+
+function renderHUD() {
+  const enabled = getEnabledPlayers();
+
+  const p1 = enabled[0] || { name: "Player 1", coins: 0, id: null };
+  const p2 = enabled[1] || { name: "Player 2", coins: 0, id: null };
+  const p3 = enabled[2] || { name: "Player 3", coins: 0, id: null };
+
+  if ($("h-k")) $("h-k").innerText = `${p1.name}: ${p1.coins} 🪙`;
+  if ($("h-p")) $("h-p").innerText = `${p2.name}: ${p2.coins} 🪙`;
+  if ($("h-me")) $("h-me").innerText = `${p3.name}: ${p3.coins} 🪙`;
+
+  const active = getActivePlayer();
+
+  if ($("hp-k-tag")) {
+    $("hp-k-tag").innerText = active?.id === p1.id ? "ACTIVE" : "OFF";
+    $("hp-k-tag").className =
+      active?.id === p1.id ? "hp-status hp-on" : "hp-status hp-off";
+  }
+
+  if ($("hp-p-tag")) {
+    $("hp-p-tag").innerText = active?.id === p2.id ? "ACTIVE" : "OFF";
+    $("hp-p-tag").className =
+      active?.id === p2.id ? "hp-status hp-on" : "hp-status hp-off";
+  }
+}
+
+/* ============================
+   MODALS
+============================ */
+function hideAllModals() {
+  document.querySelectorAll(".full-modal").forEach((el) => {
+    el.style.display = "none";
+  });
+}
+
+function showModal(id) {
+  hideAllModals();
+  const el = $(id);
+  if (el) el.style.display = "block";
+}
+
+function closeModal(id) {
+  const el = $(id);
+  if (el) el.style.display = "none";
+}
+
+/* ============================
+   PINS / MAP SELECTION
+============================ */
+function hasValidCoords(pin) {
+  return (
+    Array.isArray(pin?.l) &&
+    pin.l.length === 2 &&
+    Number.isFinite(pin.l[0]) &&
+    Number.isFinite(pin.l[1])
+  );
+}
+
+function getEffectiveTier() {
+  if (state.activePack === "adult") return "adult";
+  if (state.tierMode === "auto") {
+    return getEnabledPlayers().length <= 1 ? "adult" : "teen";
+  }
+  return state.tierMode || "kid";
+}
+
+function getCurrentPins() {
+  if (state.activePack === "adult") {
+    if (!state.activeAdultCategory) return ADULT_PINS.filter(hasValidCoords);
+    return ADULT_PINS.filter(
+      (p) => p.category === state.activeAdultCategory && hasValidCoords(p)
+    );
+  }
+
+  if (state.mapMode === "park") {
+    return PINS.filter((p) => p.set === "park" && hasValidCoords(p));
+  }
+
+  if (state.mapMode === "abbey") {
+    return PINS.filter((p) => p.set === "abbey" && hasValidCoords(p));
+  }
+
+  return PINS.filter((p) => p.set === "core" && hasValidCoords(p));
+}
+
+function getModeStart() {
+  if (state.activePack === "adult") {
+    const pins = getCurrentPins();
+    if (pins.length) return [pins[0].l[0], pins[0].l[1], 14];
+    return [54.11371, -3.218448, 14];
+  }
+
+  if (state.mapMode === "park") return [54.1174, -3.2168, 16];
+  if (state.mapMode === "abbey") return [54.1344, -3.1964, 15];
+  return [54.11371, -3.218448, 14];
+}
+
+function createHeroIcon() {
+  const char = state.settings.character || "hero_duo";
+  const emoji = CHARACTER_ICONS[char] || "🧭";
+
+  return L.divIcon({
+    className: "marker-logo",
+    html: `<div style="font-size:40px;line-height:1;">${emoji}</div>`,
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+  });
+}
+
+function createPinIcon(pin) {
+  return L.divIcon({
+    className: "marker-logo",
+    html: `<div style="font-size:28px;line-height:1;">${pin.i || "📍"}</div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17],
+  });
+}
+
+/* ============================
+   MAP
+============================ */
+function initMap() {
+  const [lat, lng, zoom] = getModeStart();
+
+  map = L.map("map", {
+    zoomControl: !!state.settings.zoomUI,
+  }).setView([lat, lng], zoom);
+
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "&copy; OpenStreetMap contributors",
+    maxZoom: 19,
+  }).addTo(map);
+
+  heroMarker = L.marker([lat, lng], { icon: createHeroIcon() }).addTo(map);
+
+  renderPins();
+  startLocationWatch();
+}
+
+function resetMap() {
+  if (map) {
+    map.remove();
+    map = null;
+  }
+
+  activeMarkers = {};
+  heroMarker = null;
+  currentPin = null;
+
+  initMap();
+}
+
+function renderPins() {
+  if (!map) return;
+
+  Object.values(activeMarkers).forEach((m) => map.removeLayer(m));
+  activeMarkers = {};
+
+  const pins = getCurrentPins();
+
+  pins.forEach((pin) => {
+    const marker = L.marker(pin.l, {
+      icon: createPinIcon(pin),
+    }).addTo(map);
+
+    marker.on("click", () => {
+      currentPin = pin;
+      showActionButton(true);
+      updateCaptureText(`${pin.n} • READY`);
+      speakText(`${pin.n}. Ready.`);
+    });
+
+    activeMarkers[pin.id] = marker;
+  });
+}
+
+function showActionButton(show) {
+  const btn = $("action-trigger");
+  if (!btn) return;
+  btn.style.display = show ? "block" : "none";
+}
+
+function updateCaptureText(text) {
+  if ($("capture-hud")) {
+    $("capture-hud").innerText = text || "WAITING FOR GPS...";
+  }
+}
+
+function distanceInMeters(aLat, aLng, bLat, bLng) {
+  const R = 6371000;
+  const toRad = (deg) => (deg * Math.PI) / 180;
+
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+
+  const aa =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(aLat)) *
+      Math.cos(toRad(bLat)) *
+      Math.sin(dLng / 2) *
+      Math.sin(dLng / 2);
+
+  const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
+  return R * c;
+}
+
+function startLocationWatch() {
+  if (!navigator.geolocation || !map) {
+    updateCaptureText("GPS NOT AVAILABLE");
+    return;
+  }
+
+  navigator.geolocation.watchPosition(
+    (pos) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+
+      heroMarker?.setLatLng([lat, lng]);
+
+      const pins = getCurrentPins();
+      const radius = Number(state.settings.radius || 35);
+
+      let nearby = null;
+
+      for (const pin of pins) {
+        const d = distanceInMeters(lat, lng, pin.l[0], pin.l[1]);
+        if (d <= radius) {
+          nearby = pin;
+          break;
+        }
+      }
+
+      currentPin = nearby;
+
+      if (nearby) {
+        updateCaptureText(`${nearby.n} • READY`);
+        showActionButton(true);
+      } else {
+        if (state.activePack === "adult") {
+          const label = state.activeAdultCategory
+            ? `ADULT: ${String(state.activeAdultCategory)
+                .replaceAll("_", " ")
+                .toUpperCase()}`
+            : "ADULT MAP";
+          updateCaptureText(label);
+        } else {
+          updateCaptureText(
+            state.mapMode === "core"
+              ? "FULL BARROW MAP"
+              : state.mapMode === "park"
+              ? "PARK ADVENTURE"
+              : "ABBEY QUEST"
+          );
+        }
+        showActionButton(false);
+      }
+    },
+    () => {
+      updateCaptureText("GPS ERROR");
+    },
+    {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 10000,
+    }
+  );
+}
+
+/* ============================
+   QUEST FLOW
+============================ */
+function openMissionMenu() {
+  if (!currentPin) return;
+
+  if ($("q-name")) $("q-name").innerText = currentPin.n;
+
+  if ($("quest-status")) {
+    $("quest-status").innerText =
+      state.activePack === "adult"
+        ? `STATUS: ADULT • ${String(
+            state.activeAdultCategory || "GENERAL"
+          ).toUpperCase()}`
+        : `STATUS: ${state.mapMode.toUpperCase()}`;
+  }
+
+  if ($("mode-banner")) {
+    $("mode-banner").style.display = "block";
+
+    if (state.activePack === "adult") {
+      $("mode-banner").innerText = `ADULT MAP\n${currentPin.n}`;
+    } else {
+      $("mode-banner").innerText =
+        state.mapMode === "core"
+          ? `FULL BARROW\n${currentPin.n}`
+          : state.mapMode === "park"
+          ? `PARK\n${currentPin.n}`
+          : `ABBEY\n${currentPin.n}`;
+    }
+  }
+
+  if ($("boss-banner")) {
+    const isBoss = currentPin.type === "boss";
+    $("boss-banner").style.display = isBoss ? "block" : "none";
+    $("boss-banner").innerText = isBoss ? "FINAL TRIAL ACTIVE" : "";
+  }
+
+  speakText(`${currentPin.n}. Quest menu opened.`);
+  showModal("quest-modal");
+}
+
+function openTask(mode) {
+  if (!currentPin) return;
+
+  const tier = getEffectiveTier();
+  let task;
+
+  if (state.activePack === "adult") {
+    const content = ADULT_CONTENT?.[currentPin.id];
+    task = {
+      q: content?.title || `${mode.toUpperCase()} @ ${currentPin.n}`,
+      options: ["CONTINUE", "LEAVE", "SKIP", "BACK"],
+      answer: 0,
+      fact: content?.story || "Adult story content not found for this pin yet.",
+      meta: { rewardCoins: 40 },
+    };
+  } else {
+    task = getQA(currentPin.id, mode, tier);
+  }
+
+  currentTask = {
+    mode,
+    pin: currentPin,
+    question: task,
+  };
+
+  if ($("task-title")) {
+    $("task-title").innerText = `${mode.toUpperCase()} @ ${currentPin.n}`;
+  }
+
+  if ($("task-desc")) {
+    $("task-desc").innerText = task?.q || "No mission found.";
+  }
+
+  renderTaskOptions(task);
+
+  speakText(task?.q || "No mission found.");
+  setTimeout(() => speakOptions(task?.options || []), 700);
+
+  if (state.activePack === "adult" && task?.fact) {
+    setTimeout(() => speakText(task.fact, false), 1400);
+  }
+
+  showModal("task-modal");
+}
+
+function renderTaskOptions(question) {
+  const wrap = $("task-options");
+  if (!wrap) return;
+
+  wrap.innerHTML = "";
+
+  if (!question?.options?.length) return;
+
+  question.options.forEach((option, index) => {
+    const btn = document.createElement("button");
+    btn.className = "mcq-btn";
+    btn.innerText = option;
+    btn.addEventListener("click", () => answerMission(index));
+    wrap.appendChild(btn);
+  });
+
+  if ($("task-feedback")) {
+    $("task-feedback").style.display = "none";
+    $("task-feedback").innerText = "";
+  }
+
+  setTimeout(() => speakOptions(question?.options || []), 300);
+}
+
+/* ============================
+   MYSTERIES
+============================ */
+function hasUnlockedMystery(id) {
+  return state.unlockedMysteries.includes(Number(id));
+}
+
+function unlockMystery(id) {
+  const num = Number(id);
+  if (!Number.isFinite(num)) return;
+  if (!hasUnlockedMystery(num)) {
+    state.unlockedMysteries.push(num);
+    saveState();
+  }
+}
+
+function maybeUnlockMystery() {
+  const chance = 0.35;
+  if (Math.random() > chance) return null;
+
+  const mystery = getRandomMystery(state.unlockedMysteries);
+  if (!mystery) return null;
+
+  unlockMystery(mystery.id);
+  return mystery;
+}
+
+/* ============================
+   ANSWERS / REWARDS
+============================ */
+function answerMission(index) {
+  if (!currentTask) return;
+
+  const q = currentTask.question;
+  const correct = index === q.answer;
+
+  const feedback = $("task-feedback");
+  if (!feedback) return;
+
+  feedback.style.display = "block";
+
+  if (!correct) {
+    const correctAnswer =
+      Array.isArray(q.options) && q.options[q.answer] != null
+        ? q.options[q.answer]
+        : "Unknown";
+
+    feedback.style.color = "#ff6b6b";
+    feedback.innerText = `Wrong answer.\nCorrect answer: ${correctAnswer}`;
+
+    speakText(`Wrong answer. The correct answer is ${correctAnswer}.`);
+    return;
+  }
+
+  const active = getActivePlayer();
+  const reward =
+    Number(q?.meta?.rewardCoins) || (state.activePack === "adult" ? 40 : 25);
+
+  if (active) {
+    updateCoins(active.id, reward);
+  }
+
+  const mystery = maybeUnlockMystery();
+
+  feedback.style.color = "var(--neon)";
+
+  if (mystery) {
+    feedback.innerText =
+      `Correct! +${reward} coins\n\n` +
+      `BONUS MYSTERY UNLOCKED\n` +
+      `${mystery.icon || "❓"} ${mystery.title}\n\n` +
+      `${mystery.story}\n\n` +
+      `${mystery.evidence || ""}`;
+
+    speakText(
+      `Correct. ${reward} coins awarded. Bonus mystery unlocked. ${
+        mystery.title
+      }. ${mystery.story}. ${mystery.evidence || ""}`
+    );
+  } else {
+    feedback.innerText =
+      `Correct! +${reward} coins\n\n` + `${q.fact || "Mission complete."}`;
+
+    speakText(
+      `Correct. ${reward} coins awarded. ${q.fact || "Mission complete."}`
+    );
+  }
+}
+
+/* ============================
+   SETTINGS / HOME
+============================ */
+function applySettingsToUI() {
+  if ($("radius-label")) $("radius-label").innerText = state.settings.radius;
+  if ($("pitch-label")) $("pitch-label").innerText = state.settings.voicePitch;
+  if ($("rate-label")) $("rate-label").innerText = state.settings.voiceRate;
+  if ($("sfx-label")) $("sfx-label").innerText = state.settings.sfxVol;
+  if ($("zoomui-label"))
+    $("zoomui-label").innerText = state.settings.zoomUI ? "ON" : "OFF";
+
+  if ($("enter-radius")) $("enter-radius").value = state.settings.radius;
+  if ($("v-pitch")) $("v-pitch").value = state.settings.voicePitch;
+  if ($("v-rate")) $("v-rate").value = state.settings.voiceRate;
+  if ($("sfx-vol")) $("sfx-vol").value = state.settings.sfxVol;
+  if ($("char-select")) $("char-select").value = state.settings.character;
+  if ($("tier-mode")) $("tier-mode").value = state.tierMode || "kid";
+}
+
+function renderHomeLog() {
+  const summary = $("home-summary");
+  const list = $("home-list");
+
+  if (!summary || !list) return;
+
+  const pins = getCurrentPins();
+  const mysteryCount = state.unlockedMysteries?.length || 0;
+
+  summary.innerText =
+    `Pins loaded: ${pins.length} • ` +
+    `Pack: ${state.activePack} • ` +
+    `Mode: ${state.mapMode} • ` +
+    `Tier: ${getEffectiveTier()} • ` +
+    `Mysteries unlocked: ${mysteryCount}`;
+
+  const mysteryBlock = mysteryCount
+    ? `
+      <div style="padding:10px;border:1px solid #444;border-radius:12px;margin:8px 0 14px;background:#161616;">
+        <div style="font-weight:bold;color:var(--gold);">UNLOCKED MYSTERIES</div>
+        <div style="margin-top:6px;font-size:13px;opacity:.9;">
+          ${state.unlockedMysteries.map((id) => `#${id}`).join(", ")}
+        </div>
+      </div>
+    `
+    : `
+      <div style="padding:10px;border:1px solid #333;border-radius:12px;margin:8px 0 14px;background:#111;">
+        <div style="font-weight:bold;color:var(--gold);">UNLOCKED MYSTERIES</div>
+        <div style="margin-top:6px;font-size:13px;opacity:.85;">None yet.</div>
+      </div>
+    `;
+
+  list.innerHTML =
+    mysteryBlock +
+    pins
+      .slice(0, 50)
+      .map(
+        (pin) => `
+        <div style="padding:10px;border:1px solid #333;border-radius:12px;margin:8px 0;background:#111;">
+          <div style="font-weight:bold;">${pin.n}</div>
+          <div style="opacity:.85;font-size:12px;">${
+            pin.zone || pin.set || pin.category || "unknown"
+          }</div>
+        </div>
+      `
+      )
+      .join("");
+}
+
+function updateStartButtons() {
+  $("pill-full")?.classList.toggle(
+    "active",
+    state.activePack === "classic" && state.mapMode === "core"
+  );
+  $("pill-park")?.classList.toggle(
+    "active",
+    state.activePack === "classic" && state.mapMode === "park"
+  );
+  $("pill-docks")?.classList.toggle(
+    "active",
+    state.activePack === "classic" && state.mapMode === "abbey"
+  );
+
+  $("pill-kids")?.classList.toggle("active", state.tierMode === "kid");
+  $("pill-teen")?.classList.toggle("active", state.tierMode === "teen");
+
+  $("pill-truecrime")?.classList.toggle(
+    "active",
+    state.activePack === "adult" && state.activeAdultCategory === "true_crime"
+  );
+  $("pill-conspiracy")?.classList.toggle(
+    "active",
+    state.activePack === "adult" && state.activeAdultCategory === "conspiracy"
+  );
+  $("pill-history")?.classList.toggle(
+    "active",
+    state.activePack === "adult" && state.activeAdultCategory === "history"
+  );
+}
+
+/* ============================
+   BUTTONS
+============================ */
+function wireButtons() {
+  $("btn-start")?.addEventListener("click", () => closeModal("start-modal"));
+  $("btn-start-close")?.addEventListener("click", () =>
+    closeModal("start-modal")
+  );
+  $("btn-start-close-x")?.addEventListener("click", () =>
+    closeModal("start-modal")
+  );
+
+  $("btn-home")?.addEventListener("click", () => {
+    renderHomeLog();
+    showModal("home-modal");
+    speakText("Home base log opened.");
+  });
+
+  $("btn-home-close")?.addEventListener("click", () =>
+    closeModal("home-modal")
+  );
+  $("btn-home-close-x")?.addEventListener("click", () =>
+    closeModal("home-modal")
+  );
+
+  $("btn-settings")?.addEventListener("click", () => {
+    showModal("settings-modal");
+    speakText("System config opened.");
+  });
+
+  $("btn-open-settings")?.addEventListener("click", () => {
+    showModal("settings-modal");
+    speakText("System config opened.");
+  });
+
+  $("btn-open-settings-from-commander")?.addEventListener("click", () => {
+    showModal("settings-modal");
+    speakText("System config opened.");
+  });
+
+  $("btn-close-settings")?.addEventListener("click", () =>
+    closeModal("settings-modal")
+  );
+  $("btn-close-settings-x")?.addEventListener("click", () =>
+    closeModal("settings-modal")
+  );
+
+  $("btn-commander")?.addEventListener("click", () => {
+    showModal("commander-hub");
+    speakText("Commander hub opened.");
+  });
+
+  $("btn-open-commander-from-home")?.addEventListener("click", () => {
+    showModal("commander-hub");
+    speakText("Commander hub opened.");
+  });
+
+  $("btn-close-commander")?.addEventListener("click", () =>
+    closeModal("commander-hub")
+  );
+  $("btn-close-commander-x")?.addEventListener("click", () =>
+    closeModal("commander-hub")
+  );
+
+  $("btn-close-quest")?.addEventListener("click", () =>
+    closeModal("quest-modal")
+  );
+  $("btn-task-close")?.addEventListener("click", () =>
+    closeModal("task-modal")
+  );
+
+  $("action-trigger")?.addEventListener("click", openMissionMenu);
+
+  $("pill-full")?.addEventListener("click", () => {
+    state.activePack = "classic";
+    state.mapMode = "core";
+    state.activeAdultCategory = null;
+    saveState();
+    updateStartButtons();
+    resetMap();
+    speakText("Full Barrow selected.");
+  });
+
+  $("pill-park")?.addEventListener("click", () => {
+    state.activePack = "classic";
+    state.mapMode = "park";
+    state.activeAdultCategory = null;
+    saveState();
+    updateStartButtons();
+    resetMap();
+    speakText("Park selected.");
+  });
+
+  $("pill-docks")?.addEventListener("click", () => {
+    state.activePack = "classic";
+    state.mapMode = "abbey";
+    state.activeAdultCategory = null;
+    saveState();
+    updateStartButtons();
+    resetMap();
+    speakText("Abbey selected.");
+  });
+
+  $("pill-truecrime")?.addEventListener("click", () => {
+    state.activePack = "adult";
+    state.activeAdultCategory = "true_crime";
+    saveState();
+    updateStartButtons();
+    resetMap();
+    speakText("True crime selected.");
+  });
+
+  $("pill-conspiracy")?.addEventListener("click", () => {
+    state.activePack = "adult";
+    state.activeAdultCategory = "conspiracy";
+    saveState();
+    updateStartButtons();
+    resetMap();
+    speakText("Conspiracy selected.");
+  });
+
+  $("pill-history")?.addEventListener("click", () => {
+    state.activePack = "adult";
+    state.activeAdultCategory = "history";
+    saveState();
+    updateStartButtons();
+    resetMap();
+    speakText("History selected.");
+  });
+
+  $("pill-kids")?.addEventListener("click", () => {
+    state.tierMode = "kid";
+    saveState();
+    updateStartButtons();
+    speakText("Kids mode selected.");
+  });
+
+  $("pill-teen")?.addEventListener("click", () => {
+    state.tierMode = "teen";
+    saveState();
+    updateStartButtons();
+    speakText("Teen mode selected.");
+  });
+
+  $("tier-mode")?.addEventListener("change", (e) => {
+    state.tierMode = e.target.value;
+    saveState();
+  });
+
+  document.querySelectorAll(".m-tile").forEach((tile) => {
+    tile.addEventListener("click", () => {
+      const mode = tile.dataset.mode;
+      if (!mode) return;
+      closeModal("quest-modal");
+      openTask(mode);
+    });
+  });
+
+  $("btn-player-1")?.addEventListener("click", () => setPlayerCount(1));
+  $("btn-player-2")?.addEventListener("click", () => setPlayerCount(2));
+  $("btn-player-3")?.addEventListener("click", () => setPlayerCount(3));
+  $("btn-player-4")?.addEventListener("click", () => setPlayerCount(4));
+
+  $("btn-hp-k")?.addEventListener("click", () => {
+    const p = getEnabledPlayers()[0];
+    if (p) setActivePlayer(p.id);
+  });
+
+  $("btn-hp-p")?.addEventListener("click", () => {
+    const p = getEnabledPlayers()[1] || getEnabledPlayers()[0];
+    if (p) setActivePlayer(p.id);
+  });
+
+  $("btn-swap")?.addEventListener("click", () => {
+    const enabled = getEnabledPlayers();
+    if (enabled.length >= 2) {
+      const tmp = enabled[0].name;
+      enabled[0].name = enabled[1].name;
+      enabled[1].name = tmp;
+      saveState();
+      renderHUD();
+      speakText("Players swapped.");
+    }
+  });
+
+  $("btn-night")?.addEventListener("click", () => {
+    nightVisionOn = !nightVisionOn;
+    $("map")?.classList.toggle("night-vision", nightVisionOn);
+    speakText(nightVisionOn ? "Night vision on." : "Night vision off.");
+  });
+
+  $("btn-zoom-ui")?.addEventListener("click", () => {
+    state.settings.zoomUI = !state.settings.zoomUI;
+    saveState();
+    applySettingsToUI();
+    resetMap();
+    speakText(state.settings.zoomUI ? "Zoom buttons on." : "Zoom buttons off.");
+  });
+
+  $("btn-respawn-nodes")?.addEventListener("click", () => {
+    alert("Progress reset is not wired fully yet.");
+  });
+
+  $("btn-show-node-stats")?.addEventListener("click", () => {
+    alert(
+      `Pins loaded: ${getCurrentPins().length}\nPack: ${
+        state.activePack
+      }\nMode: ${state.mapMode}`
+    );
+  });
+
+  $("btn-test")?.addEventListener("click", () => {
+    alert("Systems are responding.");
+    speakText("Systems are responding.");
+  });
+
+  $("enter-radius")?.addEventListener("input", (e) => {
+    state.settings.radius = Number(e.target.value);
+    saveState();
+    applySettingsToUI();
+  });
+
+  $("v-pitch")?.addEventListener("input", (e) => {
+    state.settings.voicePitch = Number(e.target.value);
+    saveState();
+    applySettingsToUI();
+    speakText(`Voice pitch ${state.settings.voicePitch}`);
+  });
+
+  $("v-rate")?.addEventListener("input", (e) => {
+    state.settings.voiceRate = Number(e.target.value);
+    saveState();
+    applySettingsToUI();
+    speakText(`Voice rate ${state.settings.voiceRate}`);
+  });
+
+  $("sfx-vol")?.addEventListener("input", (e) => {
+    state.settings.sfxVol = Number(e.target.value);
+    saveState();
+    applySettingsToUI();
+  });
+
+  $("char-select")?.addEventListener("change", (e) => {
+    state.settings.character = e.target.value;
+    saveState();
+    resetMap();
+    applySettingsToUI();
+    speakText(`Character changed to ${e.target.value}`);
+  });
+}
+
+/* ============================
+   BOOT
+============================ */
+function boot() {
+  try {
+    renderHUD();
+    applySettingsToUI();
+    updateStartButtons();
+    wireButtons();
+
+    loadVoices();
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.onvoiceschanged = loadVoices;
+    }
+
+    initMap();
+    console.log("App loaded");
+  } catch (err) {
+    console.error("BOOT ERROR:", err);
+  }
+}
+
+window.addEventListener("DOMContentLoaded", boot);

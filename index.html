@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#000000" />
+    <title>Barrow Quest</title>
+
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+
+    <style>
+      .modal-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      .modal-header h1,
+      .modal-header h2 {
+        margin: 0;
+      }
+
+      .close-x {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        border: 1px solid #333;
+        background: #111;
+        color: #fff;
+        font-size: 20px;
+        line-height: 44px;
+        text-align: center;
+        cursor: pointer;
+      }
+
+      .start-grid {
+        display: grid;
+        gap: 12px;
+        margin-top: 14px;
+      }
+
+      .start-card,
+      .settings-card,
+      .setting-row,
+      .case-card {
+        border: 1px solid #333;
+        background: rgba(255, 255, 255, 0.04);
+        border-radius: 18px;
+        padding: 14px;
+        text-align: left;
+      }
+
+      .start-card h3,
+      .settings-card h3,
+      .setting-row h3,
+      .case-card h3 {
+        margin: 0 0 10px;
+      }
+
+      .start-mini,
+      .settings-mini,
+      .case-mini {
+        opacity: 0.8;
+        font-size: 12px;
+        margin-top: 8px;
+      }
+
+      .pill-row {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 10px;
+      }
+
+      .pill {
+        border: 1px solid #333;
+        background: rgba(255, 255, 255, 0.05);
+        border-radius: 999px;
+        padding: 10px 14px;
+        cursor: pointer;
+        font-family: monospace;
+        font-size: 12px;
+        color: white;
+      }
+
+      .pill.active {
+        border-color: var(--gold);
+        box-shadow: 0 0 0 2px rgba(255, 215, 0, 0.12) inset;
+      }
+
+      .adult-action-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .adult-action {
+        background: linear-gradient(180deg, #1b2d4c 0%, #14233a 100%);
+        border: 2px solid rgba(255, 255, 255, 0.14);
+        padding: 18px 12px;
+        border-radius: 18px;
+        font-weight: 900;
+        cursor: pointer;
+        user-select: none;
+        color: white;
+        text-align: center;
+      }
+
+      .adult-action span {
+        display: block;
+        font-size: 30px;
+        margin-bottom: 8px;
+      }
+
+      .case-block {
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 16px;
+        padding: 14px;
+        margin-top: 12px;
+        background: rgba(255, 255, 255, 0.04);
+        text-align: left;
+      }
+
+      .case-label {
+        font-size: 12px;
+        opacity: 0.8;
+        margin-bottom: 8px;
+        letter-spacing: 0.4px;
+      }
+
+      .case-body {
+        white-space: pre-wrap;
+        line-height: 1.45;
+      }
+
+      .adult-only {
+        display: none;
+      }
+
+      .classic-only {
+        display: block;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="coin-hud">
+      <div style="color: var(--kylan)">
+        P1: <span id="h-k">Player 1: 0 🪙</span>
+        <span id="hp-k-tag" class="hp-status hp-off">OFF</span>
+      </div>
+      <div style="color: var(--piper)">
+        P2: <span id="h-p">Player 2: 0 🪙</span>
+        <span id="hp-p-tag" class="hp-status hp-off">OFF</span>
+      </div>
+      <div style="color: var(--parent)">
+        P3: <span id="h-me">Player 3: 0 🪙</span>
+      </div>
+      <div
+        id="capture-hud"
+        style="margin-top: 10px; font-size: 12px; color: var(--gold)"
+      >
+        CAPTURE: —
+      </div>
+    </div>
+
+    <div id="map"></div>
+
+    <button id="action-trigger" aria-label="Action">⚡</button>
+
+    <div class="hud-dock" aria-label="Bottom Controls">
+      <button id="btn-home" class="hud-btn" aria-label="Home">🏠</button>
+      <button id="btn-commander" class="hud-btn" aria-label="Commander">
+        🎮
+      </button>
+      <button id="btn-settings" class="hud-btn" aria-label="Settings">
+        ⚙️
+      </button>
+    </div>
+
+    <div id="start-modal" class="full-modal" style="display: block">
+      <div class="modal-header">
+        <h2 style="color: var(--gold)">BARROW QUEST</h2>
+        <button
+          type="button"
+          class="close-x"
+          id="btn-start-close-x"
+          aria-label="Close Start"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="start-grid">
+        <div class="start-card">
+          <h3>🧒 CLASSIC ADVENTURE</h3>
+          <div class="pill-row">
+            <button class="pill active" id="pill-kids" type="button">
+              KIDS
+            </button>
+            <button class="pill" id="pill-teen" type="button">TEEN</button>
+          </div>
+          <div class="start-mini">
+            Adventure mode uses quiz, battle, logic, speed, activity, family and
+            more.
+          </div>
+        </div>
+
+        <div class="start-card">
+          <h3>🗺️ ADVENTURE MAPS</h3>
+          <div class="pill-row">
+            <button class="pill active" id="pill-full" type="button">
+              FULL BARROW
+            </button>
+            <button class="pill" id="pill-park" type="button">
+              BARROW PARK
+            </button>
+            <button class="pill" id="pill-docks" type="button">ABBEY</button>
+          </div>
+        </div>
+
+        <div class="start-card">
+          <h3>🕵️ ADULT CASE MODE</h3>
+          <div class="pill-row">
+            <button class="pill" id="pill-truecrime" type="button">
+              TRUE CRIME
+            </button>
+            <button class="pill" id="pill-conspiracy" type="button">
+              CONSPIRACY
+            </button>
+            <button class="pill" id="pill-history" type="button">
+              HISTORY
+            </button>
+          </div>
+          <div class="start-mini">
+            Case mode uses story, evidence, clue and AR verify instead of the
+            adventure grid.
+          </div>
+        </div>
+
+        <div class="start-card">
+          <h3>🚀 READY</h3>
+          <button class="win-btn" id="btn-start" type="button">
+            START ADVENTURE
+          </button>
+          <button
+            class="win-btn"
+            id="btn-open-settings"
+            type="button"
+            style="background: #222; color: #fff"
+          >
+            SETTINGS
+          </button>
+        </div>
+      </div>
+
+      <button
+        class="win-btn"
+        id="btn-start-close"
+        style="background: #222; color: #fff; margin-top: 14px"
+      >
+        CLOSE
+      </button>
+    </div>
+
+    <div id="commander-hub" class="full-modal">
+      <div class="modal-header">
+        <h1 style="color: var(--parent)">COMMANDER HUB</h1>
+        <button
+          type="button"
+          class="close-x"
+          id="btn-close-commander-x"
+          aria-label="Close Commander"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="setting-row">
+        <h3>PLAYERS</h3>
+        <div style="display: grid; gap: 10px">
+          <button class="win-btn" id="btn-player-1" type="button">
+            1 PLAYER
+          </button>
+          <button class="win-btn" id="btn-player-2" type="button">
+            2 PLAYERS
+          </button>
+          <button class="win-btn" id="btn-player-3" type="button">
+            3 PLAYERS
+          </button>
+          <button class="win-btn" id="btn-player-4" type="button">
+            4 PLAYERS
+          </button>
+        </div>
+      </div>
+
+      <div class="setting-row">
+        <h3>ACTIVE PLAYER</h3>
+        <div style="display: flex; gap: 10px">
+          <button
+            type="button"
+            class="win-btn"
+            style="background: var(--kylan); color: white"
+            id="btn-hp-k"
+          >
+            PLAYER 1
+          </button>
+          <button
+            type="button"
+            class="win-btn"
+            style="background: var(--piper); color: #000"
+            id="btn-hp-p"
+          >
+            PLAYER 2
+          </button>
+        </div>
+        <button type="button" class="win-btn" id="btn-swap">
+          SWAP FIRST TWO PLAYERS
+        </button>
+      </div>
+
+      <button
+        type="button"
+        class="win-btn"
+        id="btn-close-commander"
+        style="background: #222; color: #fff; margin-top: 16px"
+      >
+        EXIT HUB
+      </button>
+    </div>
+
+    <div id="home-modal" class="full-modal">
+      <div class="modal-header">
+        <h2 style="color: var(--gold)">🏠 HOME BASE LOG</h2>
+        <button
+          type="button"
+          class="close-x"
+          id="btn-home-close-x"
+          aria-label="Close Home"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div
+        id="home-summary"
+        style="text-align: left; margin: 15px 0; font-family: monospace"
+      ></div>
+      <div id="home-list" style="text-align: left"></div>
+
+      <button
+        class="win-btn"
+        id="btn-home-close"
+        style="background: #222; color: white"
+      >
+        CLOSE
+      </button>
+    </div>
+
+    <div id="settings-modal" class="full-modal">
+      <div class="modal-header">
+        <h2 style="color: var(--gold)">SYSTEM CONFIG</h2>
+        <button
+          type="button"
+          class="close-x"
+          id="btn-close-settings-x"
+          aria-label="Close Settings"
+        >
+          ✕
+        </button>
+      </div>
+
+      <div class="settings-card">
+        <h3>CHARACTER SELECT</h3>
+        <select id="char-select">
+          <option value="hero_duo" selected>Hero Duo</option>
+          <option value="ninja">Ninja Scout</option>
+          <option value="wizard">Wizard Guide</option>
+          <option value="robot">Robo Ranger</option>
+          <option value="pirate">Pirate Captain</option>
+        </select>
+      </div>
+
+      <div class="settings-card">
+        <h3>CLASSIC TIER</h3>
+        <select id="tier-mode">
+          <option value="kid">KIDS</option>
+          <option value="teen">TEEN</option>
+          <option value="adult">ADULT</option>
+          <option value="auto">AUTO</option>
+        </select>
+        <div class="settings-mini">
+          Adult case mode ignores this and uses dossier flow.
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <h3>GAMEPLAY</h3>
+        <div class="case-label">Enter Radius</div>
+        <strong><span id="radius-label">35</span>m</strong>
+        <input
+          type="range"
+          min="10"
+          max="80"
+          step="5"
+          id="enter-radius"
+          value="35"
+        />
+      </div>
+
+      <div class="settings-card">
+        <h3>DISPLAY</h3>
+        <div class="case-label">Map Zoom Buttons</div>
+        <strong><span id="zoomui-label">OFF</span></strong>
+        <button
+          class="win-btn"
+          id="btn-zoom-ui"
+          style="background: #333; color: #fff"
+        >
+          TOGGLE ZOOM UI
+        </button>
+        <button class="win-btn" id="btn-night">NIGHT VISION</button>
+      </div>
+
+      <div class="settings-card">
+        <h3>AUDIO</h3>
+        <div class="case-label">Voice Pitch</div>
+        <strong><span id="pitch-label">1</span>x</strong>
+        <input
+          type="range"
+          min="0.5"
+          max="1.5"
+          step="0.1"
+          id="v-pitch"
+          value="1"
+        />
+
+        <div class="case-label" style="margin-top: 12px">Voice Rate</div>
+        <strong><span id="rate-label">1</span>x</strong>
+        <input
+          type="range"
+          min="0.6"
+          max="1.4"
+          step="0.1"
+          id="v-rate"
+          value="1"
+        />
+
+        <div class="case-label" style="margin-top: 12px">Voice Volume</div>
+        <strong><span id="sfx-label">80</span>%</strong>
+        <input
+          type="range"
+          min="0"
+          max="100"
+          step="5"
+          id="sfx-vol"
+          value="80"
+        />
+      </div>
+
+      <button class="win-btn" id="btn-test">TEST SYSTEMS</button>
+      <button class="win-btn" id="btn-close-settings">CLOSE</button>
+    </div>
+
+    <div id="quest-modal" class="full-modal">
+      <h1 id="q-name" style="color: var(--gold)">ZONE</h1>
+
+      <div id="mode-banner" class="zone-banner" style="display: none"></div>
+      <div id="boss-banner" class="boss-banner" style="display: none"></div>
+
+      <div
+        id="quest-status"
+        style="margin: 10px 0; font-size: 13px; color: #fff"
+      >
+        STATUS: —
+      </div>
+
+      <div id="classic-mission-wrap" class="classic-only">
+        <button
+          class="win-btn"
+          id="btn-ar-open"
+          style="
+            background: #111;
+            color: var(--gold);
+            border: 2px solid var(--gold);
+          "
+        >
+          AR VERIFY (SCAN)
+        </button>
+
+        <div class="mission-grid" style="margin-top: 15px">
+          <div class="m-tile" data-mode="quiz"><span>❓</span>QUIZ</div>
+          <div class="m-tile" data-mode="battle"><span>⚔️</span>BATTLE</div>
+          <div class="m-tile" data-mode="history"><span>📜</span>HISTORY</div>
+          <div class="m-tile" data-mode="logic"><span>🧩</span>LOGIC</div>
+          <div class="m-tile" data-mode="speed"><span>⚡</span>SPEED</div>
+          <div class="m-tile" data-mode="health"><span>🏃</span>HEALTH</div>
+          <div class="m-tile" data-mode="activity"><span>🎯</span>ACTIVITY</div>
+          <div class="m-tile" data-mode="family"><span>👨‍👩‍👧</span>FAMILY</div>
+        </div>
+      </div>
+
+      <div id="adult-investigation-wrap" class="adult-only">
+        <div class="case-card">
+          <h3>CASE PANEL</h3>
+          <div class="case-mini">
+            Open the case, inspect evidence, review clue, then AR verify hotspot
+            proof.
+          </div>
+        </div>
+
+        <div class="adult-action-grid">
+          <button class="adult-action" id="adult-read-case" type="button">
+            <span>📖</span>READ CASE
+          </button>
+          <button class="adult-action" id="adult-view-evidence" type="button">
+            <span>🧾</span>EVIDENCE
+          </button>
+          <button class="adult-action" id="adult-view-clue" type="button">
+            <span>🔍</span>CLUE
+          </button>
+          <button class="adult-action" id="adult-ar-verify" type="button">
+            <span>📷</span>AR VERIFY
+          </button>
+        </div>
+      </div>
+
+      <button
+        class="win-btn"
+        style="background: #222; color: white"
+        id="btn-close-quest"
+      >
+        CLOSE
+      </button>
+    </div>
+
+    <div id="ar-modal" class="full-modal">
+      <h1 style="color: var(--gold)">AR VERIFY</h1>
+      <p id="ar-hint" style="opacity: 0.9">
+        Scan the hotspot and confirm if you can see the clue area.
+      </p>
+
+      <div class="case-block">
+        <div class="case-label">AR READOUT</div>
+        <div id="ar-readout" class="case-body">Heading: --</div>
+      </div>
+
+      <video
+        id="ar-video"
+        autoplay
+        playsinline
+        muted
+        style="
+          width: 100%;
+          border-radius: 18px;
+          border: 2px solid #333;
+          background: #000;
+          margin-top: 12px;
+        "
+      ></video>
+
+      <div style="display: flex; gap: 10px; margin-top: 12px">
+        <button
+          class="win-btn"
+          id="btn-ar-stop"
+          style="background: #333; color: #fff"
+        >
+          STOP
+        </button>
+        <button
+          class="win-btn"
+          id="btn-ar-manual"
+          style="background: var(--gold); color: #000"
+        >
+          I FOUND THE HOTSPOT
+        </button>
+      </div>
+
+      <button
+        class="win-btn"
+        id="btn-ar-close"
+        style="background: #222; color: #fff; margin-top: 15px"
+      >
+        CLOSE
+      </button>
+    </div>
+
+    <div id="task-modal" class="full-modal">
+      <h1 id="task-title" style="color: var(--gold)">MISSION</h1>
+
+      <div
+        style="
+          border: 3px solid var(--gold);
+          padding: 20px;
+          border-radius: 20px;
+          margin: 25px 0;
+          background: rgba(255, 255, 255, 0.05);
+          text-align: left;
+        "
+      >
+        <div id="task-block-story" class="case-block hidden">
+          <div class="case-label">WHAT HAPPENED</div>
+          <div id="task-story" class="case-body"></div>
+        </div>
+
+        <div id="task-block-evidence" class="case-block hidden">
+          <div class="case-label">EVIDENCE</div>
+          <div id="task-evidence" class="case-body"></div>
+        </div>
+
+        <div id="task-block-clue" class="case-block hidden">
+          <div class="case-label">CLUE</div>
+          <div id="task-clue" class="case-body"></div>
+        </div>
+
+        <p id="task-desc" style="font-size: 1.1rem; font-weight: bold"></p>
+
+        <div id="task-options" style="margin-top: 14px"></div>
+
+        <div
+          id="task-feedback"
+          style="
+            margin-top: 12px;
+            font-size: 13px;
+            color: var(--neon);
+            display: none;
+          "
+        >
+          Correct
+        </div>
+      </div>
+
+      <button
+        class="win-btn"
+        id="btn-task-close"
+        style="background: #222; color: #fff"
+      >
+        CLOSE
+      </button>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script type="module" src="./app.js"></script>
+
+    <script>
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker
+            .register("./service-worker.js")
+            .catch((err) => console.error("SW registration failed:", err));
+        });
+      }
+    </script>
+  </body>
+</html>
