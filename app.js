@@ -301,6 +301,13 @@ function getAdultContentForPin(pin) {
   return ADULT_CONTENT?.[pin.id] || null;
 }
 
+function getAdultEvidenceImage(content) {
+  if (!content) return "";
+  return (
+    content?.evidenceImage || content?.evidence_image || content?.image || ""
+  );
+}
+
 function showQuestLayoutForPack() {
   const classicWrap = $("classic-mission-wrap");
   const adultWrap = $("adult-investigation-wrap");
@@ -344,7 +351,12 @@ function normaliseClassicModeFromPin(pin) {
 }
 
 function clearTaskBlocks() {
-  const ids = ["task-block-story", "task-block-evidence", "task-block-clue"];
+  const ids = [
+    "task-block-story",
+    "task-block-evidence-image",
+    "task-block-evidence",
+    "task-block-clue",
+  ];
 
   ids.forEach((id) => {
     const el = $(id);
@@ -354,6 +366,12 @@ function clearTaskBlocks() {
   if ($("task-story")) $("task-story").innerText = "";
   if ($("task-evidence")) $("task-evidence").innerText = "";
   if ($("task-clue")) $("task-clue").innerText = "";
+
+  const evidenceImage = $("task-evidence-image");
+  if (evidenceImage) {
+    evidenceImage.src = "";
+    evidenceImage.alt = "Evidence image";
+  }
 }
 
 function setTaskBlock(id, bodyId, text) {
@@ -366,6 +384,22 @@ function setTaskBlock(id, bodyId, text) {
     block.classList.remove("hidden");
   } else {
     body.innerText = "";
+    block.classList.add("hidden");
+  }
+}
+
+function setTaskImageBlock(id, imageId, src, altText = "Evidence image") {
+  const block = $(id);
+  const image = $(imageId);
+  if (!block || !image) return;
+
+  if (src) {
+    image.src = src;
+    image.alt = altText;
+    block.classList.remove("hidden");
+  } else {
+    image.src = "";
+    image.alt = "Evidence image";
     block.classList.add("hidden");
   }
 }
@@ -606,6 +640,7 @@ function openTask(mode) {
       "Case briefing not found for this location yet. Add story content for this adult pin.";
     const evidenceText = content?.evidence || "No evidence logged yet.";
     const clueText = content?.clue || "No clue logged yet.";
+    const evidenceImage = getAdultEvidenceImage(content);
 
     if (mode === "read_case") {
       task = {
@@ -613,6 +648,7 @@ function openTask(mode) {
         desc: `Case briefing for ${currentPin.n}`,
         story: storyText,
         evidence: "",
+        evidenceImage: "",
         clue: "",
         options: [],
         meta: { informational: true, rewardCoins: 0 },
@@ -624,6 +660,7 @@ function openTask(mode) {
         desc: `Evidence log for ${currentPin.n}`,
         story: "",
         evidence: evidenceText,
+        evidenceImage,
         clue: "",
         options: [],
         meta: { informational: true, rewardCoins: 0 },
@@ -635,6 +672,7 @@ function openTask(mode) {
         desc: `Clue file for ${currentPin.n}`,
         story: "",
         evidence: "",
+        evidenceImage: "",
         clue: clueText,
         options: [],
         meta: { informational: true, rewardCoins: 0 },
@@ -646,6 +684,7 @@ function openTask(mode) {
         desc: "Use AR verify to confirm the hotspot and compare the real place to the case notes.",
         story: "",
         evidence: "Hotspot verification required on site.",
+        evidenceImage: "",
         clue: "Look for details that match the case briefing before you confirm.",
         options: [],
         meta: { informational: true, rewardCoins: 0 },
@@ -658,6 +697,7 @@ function openTask(mode) {
         desc: `Case file for ${currentPin.n}`,
         story: storyText,
         evidence: evidenceText,
+        evidenceImage,
         clue: clueText,
         options: [],
         meta: { informational: true, rewardCoins: 0 },
@@ -693,6 +733,12 @@ function openTask(mode) {
   }
 
   setTaskBlock("task-block-story", "task-story", task?.story || "");
+  setTaskImageBlock(
+    "task-block-evidence-image",
+    "task-evidence-image",
+    task?.evidenceImage || "",
+    `${task?.title || currentPin?.n || "Evidence"} image`
+  );
   setTaskBlock("task-block-evidence", "task-evidence", task?.evidence || "");
   setTaskBlock("task-block-clue", "task-clue", task?.clue || "");
 
@@ -949,27 +995,22 @@ function wireButtons() {
   );
 
   $("btn-home")?.addEventListener("click", () => {
-    // reset active gameplay
     currentPin = null;
     currentTask = null;
 
-    // hide action button
     const actionBtn = $("action-trigger");
     if (actionBtn) actionBtn.style.display = "none";
 
-    // reset game mode back to default home
     state.activePack = "classic";
     state.activeAdultCategory = null;
     state.mapMode = "core";
 
     saveState?.();
 
-    // reset map cleanly
     if (typeof resetMap === "function") {
       resetMap();
     }
 
-    // show your START / HOME screen
     showModal?.("start-modal");
   });
 
