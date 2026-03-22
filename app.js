@@ -301,11 +301,13 @@ function getAdultContentForPin(pin) {
   return ADULT_CONTENT?.[pin.id] || null;
 }
 
-function getAdultEvidenceImage(content) {
-  if (!content) return "";
-  return (
-    content?.evidenceImage || content?.evidence_image || content?.image || ""
-  );
+function getAdultEvidenceImage(pin, content) {
+  if (!pin) return "";
+
+  if (content?.evidenceImage) return content.evidenceImage;
+  if (content?.image) return content.image;
+
+  return `./evidence/${pin.id}.jpg`;
 }
 
 function showQuestLayoutForPack() {
@@ -350,10 +352,46 @@ function normaliseClassicModeFromPin(pin) {
   return "quiz";
 }
 
+function ensureTaskImageBlock() {
+  const taskDesc = $("task-desc");
+  if (!taskDesc) return;
+
+  if ($("task-block-image") && $("task-image")) return;
+
+  const wrap = document.createElement("div");
+  wrap.id = "task-block-image";
+  wrap.className = "case-block hidden";
+
+  const label = document.createElement("div");
+  label.className = "case-label";
+  label.innerText = "EVIDENCE IMAGE";
+
+  const img = document.createElement("img");
+  img.id = "task-image";
+  img.alt = "Evidence";
+  img.style.width = "100%";
+  img.style.display = "block";
+  img.style.borderRadius = "14px";
+  img.style.border = "1px solid rgba(255,255,255,0.12)";
+  img.style.background = "#0b0b0b";
+  img.style.objectFit = "cover";
+  img.style.maxHeight = "340px";
+
+  wrap.appendChild(label);
+  wrap.appendChild(img);
+
+  const evidenceBlock = $("task-block-evidence");
+  if (evidenceBlock && evidenceBlock.parentNode) {
+    evidenceBlock.parentNode.insertBefore(wrap, evidenceBlock);
+  } else if (taskDesc.parentNode) {
+    taskDesc.parentNode.insertBefore(wrap, taskDesc);
+  }
+}
+
 function clearTaskBlocks() {
   const ids = [
     "task-block-story",
-    "task-block-evidence-image",
+    "task-block-image",
     "task-block-evidence",
     "task-block-clue",
   ];
@@ -367,10 +405,10 @@ function clearTaskBlocks() {
   if ($("task-evidence")) $("task-evidence").innerText = "";
   if ($("task-clue")) $("task-clue").innerText = "";
 
-  const evidenceImage = $("task-evidence-image");
-  if (evidenceImage) {
-    evidenceImage.src = "";
-    evidenceImage.alt = "Evidence image";
+  const img = $("task-image");
+  if (img) {
+    img.removeAttribute("src");
+    img.style.display = "none";
   }
 }
 
@@ -388,20 +426,33 @@ function setTaskBlock(id, bodyId, text) {
   }
 }
 
-function setTaskImageBlock(id, imageId, src, altText = "Evidence image") {
-  const block = $(id);
-  const image = $(imageId);
-  if (!block || !image) return;
+function setTaskImage(src) {
+  ensureTaskImageBlock();
 
-  if (src) {
-    image.src = src;
-    image.alt = altText;
-    block.classList.remove("hidden");
-  } else {
-    image.src = "";
-    image.alt = "Evidence image";
+  const block = $("task-block-image");
+  const img = $("task-image");
+
+  if (!block || !img) return;
+
+  if (!src) {
     block.classList.add("hidden");
+    img.removeAttribute("src");
+    img.style.display = "none";
+    return;
   }
+
+  img.onload = () => {
+    block.classList.remove("hidden");
+    img.style.display = "block";
+  };
+
+  img.onerror = () => {
+    block.classList.add("hidden");
+    img.removeAttribute("src");
+    img.style.display = "none";
+  };
+
+  img.src = src;
 }
 
 /* ============================
@@ -640,7 +691,7 @@ function openTask(mode) {
       "Case briefing not found for this location yet. Add story content for this adult pin.";
     const evidenceText = content?.evidence || "No evidence logged yet.";
     const clueText = content?.clue || "No clue logged yet.";
-    const evidenceImage = getAdultEvidenceImage(content);
+    const evidenceImage = getAdultEvidenceImage(currentPin, content);
 
     if (mode === "read_case") {
       task = {
@@ -648,8 +699,8 @@ function openTask(mode) {
         desc: `Case briefing for ${currentPin.n}`,
         story: storyText,
         evidence: "",
-        evidenceImage: "",
         clue: "",
+        evidenceImage: "",
         options: [],
         meta: { informational: true, rewardCoins: 0 },
         speech: storyText,
@@ -660,8 +711,8 @@ function openTask(mode) {
         desc: `Evidence log for ${currentPin.n}`,
         story: "",
         evidence: evidenceText,
-        evidenceImage,
         clue: "",
+        evidenceImage,
         options: [],
         meta: { informational: true, rewardCoins: 0 },
         speech: evidenceText,
@@ -672,8 +723,8 @@ function openTask(mode) {
         desc: `Clue file for ${currentPin.n}`,
         story: "",
         evidence: "",
-        evidenceImage: "",
         clue: clueText,
+        evidenceImage: "",
         options: [],
         meta: { informational: true, rewardCoins: 0 },
         speech: clueText,
@@ -684,8 +735,8 @@ function openTask(mode) {
         desc: "Use AR verify to confirm the hotspot and compare the real place to the case notes.",
         story: "",
         evidence: "Hotspot verification required on site.",
-        evidenceImage: "",
         clue: "Look for details that match the case briefing before you confirm.",
+        evidenceImage: "",
         options: [],
         meta: { informational: true, rewardCoins: 0 },
         speech:
@@ -697,8 +748,8 @@ function openTask(mode) {
         desc: `Case file for ${currentPin.n}`,
         story: storyText,
         evidence: evidenceText,
-        evidenceImage,
         clue: clueText,
+        evidenceImage: "",
         options: [],
         meta: { informational: true, rewardCoins: 0 },
         speech: storyText,
@@ -733,12 +784,7 @@ function openTask(mode) {
   }
 
   setTaskBlock("task-block-story", "task-story", task?.story || "");
-  setTaskImageBlock(
-    "task-block-evidence-image",
-    "task-evidence-image",
-    task?.evidenceImage || "",
-    `${task?.title || currentPin?.n || "Evidence"} image`
-  );
+  setTaskImage(task?.evidenceImage || "");
   setTaskBlock("task-block-evidence", "task-evidence", task?.evidence || "");
   setTaskBlock("task-block-clue", "task-clue", task?.clue || "");
 
@@ -756,9 +802,7 @@ function openTask(mode) {
   }
 
   showModal("task-modal");
-}
-
-function renderTaskOptions(question) {
+}function renderTaskOptions(question) {
   const wrap = $("task-options");
   if (!wrap) return;
 
@@ -1250,6 +1294,7 @@ function wireButtons() {
 ============================ */
 function boot() {
   try {
+    ensureTaskImageBlock();
     renderHUD();
     applySettingsToUI();
     updateStartButtons();
