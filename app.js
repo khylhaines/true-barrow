@@ -6,7 +6,7 @@ import { getRandomMystery } from "./mysteries.js";
 
 const $ = (id) => document.getElementById(id);
 
-const SAVE_KEY = "bq_world_v8";
+const SAVE_KEY = "bq_world_v9";
 
 const DEFAULT_STATE = {
   players: [
@@ -42,6 +42,7 @@ let activeMarkers = {};
 let currentPin = null;
 let currentTask = null;
 let nightVisionOn = false;
+let locationWatchId = null;
 
 const CHARACTER_ICONS = {
   hero_duo: "🧭",
@@ -223,14 +224,15 @@ function closeModal(id) {
 }
 
 /* ============================
-   PINS / MAP SELECTION
+   HELPERS
 ============================ */
 function hasValidCoords(pin) {
   return (
     Array.isArray(pin?.l) &&
     pin.l.length === 2 &&
     Number.isFinite(pin.l[0]) &&
-    Number.isFinite(pin.l[1])
+    Number.isFinite(pin.l[1]) &&
+    !(pin.l[0] === 0 && pin.l[1] === 0)
   );
 }
 
@@ -294,6 +296,80 @@ function createPinIcon(pin) {
   });
 }
 
+function getAdultContentForPin(pin) {
+  if (!pin) return null;
+  return ADULT_CONTENT?.[pin.id] || null;
+}
+
+function showQuestLayoutForPack() {
+  const classicWrap = $("classic-mission-wrap");
+  const adultWrap = $("adult-investigation-wrap");
+
+  if (classicWrap) {
+    classicWrap.style.display = state.activePack === "adult" ? "none" : "block";
+  }
+
+  if (adultWrap) {
+    adultWrap.style.display = state.activePack === "adult" ? "block" : "none";
+  }
+}
+
+function normaliseClassicModeFromPin(pin) {
+  if (!pin) return "quiz";
+
+  const type = String(pin.type || "").toLowerCase();
+
+  if (!type || type === "start") return "quiz";
+
+  if (
+    [
+      "quiz",
+      "history",
+      "logic",
+      "activity",
+      "family",
+      "battle",
+      "speed",
+      "ghost",
+      "boss",
+      "discovery",
+    ].includes(type)
+  ) {
+    return type;
+  }
+
+  if (type === "story") return "history";
+
+  return "quiz";
+}
+
+function clearTaskBlocks() {
+  const ids = ["task-block-story", "task-block-evidence", "task-block-clue"];
+
+  ids.forEach((id) => {
+    const el = $(id);
+    if (el) el.classList.add("hidden");
+  });
+
+  if ($("task-story")) $("task-story").innerText = "";
+  if ($("task-evidence")) $("task-evidence").innerText = "";
+  if ($("task-clue")) $("task-clue").innerText = "";
+}
+
+function setTaskBlock(id, bodyId, text) {
+  const block = $(id);
+  const body = $(bodyId);
+  if (!block || !body) return;
+
+  if (text) {
+    body.innerText = text;
+    block.classList.remove("hidden");
+  } else {
+    body.innerText = "";
+    block.classList.add("hidden");
+  }
+}
+
 /* ============================
    MAP
 ============================ */
@@ -316,6 +392,13 @@ function initMap() {
 }
 
 function resetMap() {
+  if (locationWatchId != null && navigator.geolocation?.clearWatch) {
+    try {
+      navigator.geolocation.clearWatch(locationWatchId);
+    } catch {}
+    locationWatchId = null;
+  }
+
   if (map) {
     map.remove();
     map = null;
@@ -388,7 +471,7 @@ function startLocationWatch() {
     return;
   }
 
-  navigator.geolocation.watchPosition(
+  locationWatchId = navigator.geolocation.watchPosition(
     (pos) => {
       const lat = pos.coords.latitude;
       const lng = pos.coords.longitude;
@@ -450,22 +533,26 @@ function startLocationWatch() {
 function openMissionMenu() {
   if (!currentPin) return;
 
+  showQuestLayoutForPack();
+
   if ($("q-name")) $("q-name").innerText = currentPin.n;
 
   if ($("quest-status")) {
     $("quest-status").innerText =
       state.activePack === "adult"
-        ? `STATUS: ADULT • ${String(
+        ? `STATUS: CASE MODE • ${String(
             state.activeAdultCategory || "GENERAL"
           ).toUpperCase()}`
-        : `STATUS: ${state.mapMode.toUpperCase()}`;
+        : `STATUS: ${state.mapMode.toUpperCase()} • ${String(
+            currentPin.type || "quiz"
+          ).toUpperCase()}`;
   }
 
   if ($("mode-banner")) {
     $("mode-banner").style.display = "block";
 
     if (state.activePack === "adult") {
-      $("mode-banner").innerText = `ADULT MAP\n${currentPin.n}`;
+      $("mode-banner").innerText = `CASE BRIEFING\n${currentPin.n}`;
     } else {
       $("mode-banner").innerText =
         state.mapMode === "core"
@@ -482,6 +569,23 @@ function openMissionMenu() {
     $("boss-banner").innerText = isBoss ? "FINAL TRIAL ACTIVE" : "";
   }
 
+  if (state.activePack === "adult") {
+    const content = getAdultContentForPin(currentPin);
+    const briefing =
+      content?.story ||
+      "Case briefing not found for this location yet. Add story content for this adult pin.";
+    speakText(briefing);
+    showModal("quest-modal");
+    return;
+  }
+
+  const primaryMode = normaliseClassicModeFromPin(currentPin);
+
+  if (primaryMode) {
+    openTask(primaryMode);
+    return;
+  }
+
   speakText(`${currentPin.n}. Quest menu opened.`);
   showModal("quest-modal");
 }
@@ -490,19 +594,84 @@ function openTask(mode) {
   if (!currentPin) return;
 
   const tier = getEffectiveTier();
-  let task;
+  let task = null;
+
+  clearTaskBlocks();
 
   if (state.activePack === "adult") {
-    const content = ADULT_CONTENT?.[currentPin.id];
-    task = {
-      q: content?.title || `${mode.toUpperCase()} @ ${currentPin.n}`,
-      options: ["CONTINUE", "LEAVE", "SKIP", "BACK"],
-      answer: 0,
-      fact: content?.story || "Adult story content not found for this pin yet.",
-      meta: { rewardCoins: 40 },
-    };
+    const content = getAdultContentForPin(currentPin);
+
+    const storyText =
+      content?.story ||
+      "Case briefing not found for this location yet. Add story content for this adult pin.";
+    const evidenceText = content?.evidence || "No evidence logged yet.";
+    const clueText = content?.clue || "No clue logged yet.";
+
+    if (mode === "read_case") {
+      task = {
+        title: content?.title || currentPin.event || currentPin.n,
+        desc: `Case briefing for ${currentPin.n}`,
+        story: storyText,
+        evidence: "",
+        clue: "",
+        options: [],
+        meta: { informational: true, rewardCoins: 0 },
+        speech: storyText,
+      };
+    } else if (mode === "evidence") {
+      task = {
+        title: content?.title || currentPin.event || currentPin.n,
+        desc: `Evidence log for ${currentPin.n}`,
+        story: "",
+        evidence: evidenceText,
+        clue: "",
+        options: [],
+        meta: { informational: true, rewardCoins: 0 },
+        speech: evidenceText,
+      };
+    } else if (mode === "clue") {
+      task = {
+        title: content?.title || currentPin.event || currentPin.n,
+        desc: `Clue file for ${currentPin.n}`,
+        story: "",
+        evidence: "",
+        clue: clueText,
+        options: [],
+        meta: { informational: true, rewardCoins: 0 },
+        speech: clueText,
+      };
+    } else if (mode === "ar_verify") {
+      task = {
+        title: content?.title || currentPin.event || currentPin.n,
+        desc: "Use AR verify to confirm the hotspot and compare the real place to the case notes.",
+        story: "",
+        evidence: "Hotspot verification required on site.",
+        clue: "Look for details that match the case briefing before you confirm.",
+        options: [],
+        meta: { informational: true, rewardCoins: 0 },
+        speech:
+          "Use AR verify to confirm the hotspot and compare the real place to the case notes.",
+      };
+    } else {
+      task = {
+        title: content?.title || currentPin.event || currentPin.n,
+        desc: `Case file for ${currentPin.n}`,
+        story: storyText,
+        evidence: evidenceText,
+        clue: clueText,
+        options: [],
+        meta: { informational: true, rewardCoins: 0 },
+        speech: storyText,
+      };
+    }
   } else {
-    task = getQA(currentPin.id, mode, tier);
+    task = getQA({
+      pinId: currentPin.id,
+      mode,
+      tier,
+      zone: currentPin.set || currentPin.zone || state.mapMode,
+      salt: Date.now(),
+    });
   }
 
   currentTask = {
@@ -512,20 +681,32 @@ function openTask(mode) {
   };
 
   if ($("task-title")) {
-    $("task-title").innerText = `${mode.toUpperCase()} @ ${currentPin.n}`;
+    $("task-title").innerText =
+      state.activePack === "adult"
+        ? task?.title || currentPin.n
+        : `${mode.toUpperCase()} @ ${currentPin.n}`;
   }
 
   if ($("task-desc")) {
-    $("task-desc").innerText = task?.q || "No mission found.";
+    $("task-desc").innerText =
+      task?.desc || task?.q || "No mission found for this location.";
   }
+
+  setTaskBlock("task-block-story", "task-story", task?.story || "");
+  setTaskBlock("task-block-evidence", "task-evidence", task?.evidence || "");
+  setTaskBlock("task-block-clue", "task-clue", task?.clue || "");
 
   renderTaskOptions(task);
 
-  speakText(task?.q || "No mission found.");
-  setTimeout(() => speakOptions(task?.options || []), 700);
-
-  if (state.activePack === "adult" && task?.fact) {
-    setTimeout(() => speakText(task.fact, false), 1400);
+  if (task?.speech) {
+    speakText(task.speech);
+  } else if (task?.q) {
+    speakText(task.q);
+    if (Array.isArray(task?.options) && task.options.length) {
+      setTimeout(() => speakOptions(task.options), 700);
+    }
+  } else {
+    speakText("No mission found.");
   }
 
   showModal("task-modal");
@@ -537,7 +718,16 @@ function renderTaskOptions(question) {
 
   wrap.innerHTML = "";
 
-  if (!question?.options?.length) return;
+  if (!question?.options?.length) {
+    wrap.style.display = "none";
+    if ($("task-feedback")) {
+      $("task-feedback").style.display = "none";
+      $("task-feedback").innerText = "";
+    }
+    return;
+  }
+
+  wrap.style.display = "grid";
 
   question.options.forEach((option, index) => {
     const btn = document.createElement("button");
@@ -551,8 +741,6 @@ function renderTaskOptions(question) {
     $("task-feedback").style.display = "none";
     $("task-feedback").innerText = "";
   }
-
-  setTimeout(() => speakOptions(question?.options || []), 300);
 }
 
 /* ============================
@@ -589,10 +777,15 @@ function answerMission(index) {
   if (!currentTask) return;
 
   const q = currentTask.question;
-  const correct = index === q.answer;
-
   const feedback = $("task-feedback");
   if (!feedback) return;
+
+  if (!Array.isArray(q?.options) || typeof q.answer !== "number") {
+    feedback.style.display = "none";
+    return;
+  }
+
+  const correct = index === q.answer;
 
   feedback.style.display = "block";
 
@@ -613,7 +806,7 @@ function answerMission(index) {
   const reward =
     Number(q?.meta?.rewardCoins) || (state.activePack === "adult" ? 40 : 25);
 
-  if (active) {
+  if (active && reward > 0) {
     updateCoins(active.id, reward);
   }
 
@@ -756,9 +949,28 @@ function wireButtons() {
   );
 
   $("btn-home")?.addEventListener("click", () => {
-    renderHomeLog();
-    showModal("home-modal");
-    speakText("Home base log opened.");
+    // reset active gameplay
+    currentPin = null;
+    currentTask = null;
+
+    // hide action button
+    const actionBtn = $("action-trigger");
+    if (actionBtn) actionBtn.style.display = "none";
+
+    // reset game mode back to default home
+    state.activePack = "classic";
+    state.activeAdultCategory = null;
+    state.mapMode = "core";
+
+    saveState?.();
+
+    // reset map cleanly
+    if (typeof resetMap === "function") {
+      resetMap();
+    }
+
+    // show your START / HOME screen
+    showModal?.("start-modal");
   });
 
   $("btn-home-close")?.addEventListener("click", () =>
@@ -778,11 +990,6 @@ function wireButtons() {
     speakText("System config opened.");
   });
 
-  $("btn-open-settings-from-commander")?.addEventListener("click", () => {
-    showModal("settings-modal");
-    speakText("System config opened.");
-  });
-
   $("btn-close-settings")?.addEventListener("click", () =>
     closeModal("settings-modal")
   );
@@ -791,11 +998,6 @@ function wireButtons() {
   );
 
   $("btn-commander")?.addEventListener("click", () => {
-    showModal("commander-hub");
-    speakText("Commander hub opened.");
-  });
-
-  $("btn-open-commander-from-home")?.addEventListener("click", () => {
     showModal("commander-hub");
     speakText("Commander hub opened.");
   });
@@ -901,6 +1103,26 @@ function wireButtons() {
     });
   });
 
+  $("adult-read-case")?.addEventListener("click", () => {
+    closeModal("quest-modal");
+    openTask("read_case");
+  });
+
+  $("adult-view-evidence")?.addEventListener("click", () => {
+    closeModal("quest-modal");
+    openTask("evidence");
+  });
+
+  $("adult-view-clue")?.addEventListener("click", () => {
+    closeModal("quest-modal");
+    openTask("clue");
+  });
+
+  $("adult-ar-verify")?.addEventListener("click", () => {
+    closeModal("quest-modal");
+    openTask("ar_verify");
+  });
+
   $("btn-player-1")?.addEventListener("click", () => setPlayerCount(1));
   $("btn-player-2")?.addEventListener("click", () => setPlayerCount(2));
   $("btn-player-3")?.addEventListener("click", () => setPlayerCount(3));
@@ -940,18 +1162,6 @@ function wireButtons() {
     applySettingsToUI();
     resetMap();
     speakText(state.settings.zoomUI ? "Zoom buttons on." : "Zoom buttons off.");
-  });
-
-  $("btn-respawn-nodes")?.addEventListener("click", () => {
-    alert("Progress reset is not wired fully yet.");
-  });
-
-  $("btn-show-node-stats")?.addEventListener("click", () => {
-    alert(
-      `Pins loaded: ${getCurrentPins().length}\nPack: ${
-        state.activePack
-      }\nMode: ${state.mapMode}`
-    );
   });
 
   $("btn-test")?.addEventListener("click", () => {
@@ -1002,6 +1212,7 @@ function boot() {
     renderHUD();
     applySettingsToUI();
     updateStartButtons();
+    showQuestLayoutForPack();
     wireButtons();
 
     loadVoices();
